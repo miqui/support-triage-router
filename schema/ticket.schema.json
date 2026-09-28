@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schema/ticket.schema.json",
+  "title": "Support Ticket",
+  "type": "object",
+  "required": ["ticket_id", "created_at", "channel", "customer", "subject", "body", "expected"],
+  "additionalProperties": false,
+  "properties": {
+    "ticket_id": {
+      "type": "string",
+      "pattern": "^TCK-[0-9]{4}$"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC timestamp with Z suffix"
+    },
+    "channel": {
+      "type": "string",
+      "enum": ["email", "web_form", "chat", "api"]
+    },
+    "customer": {
+      "type": "object",
+      "required": ["id", "tier", "since"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^C-[0-9]{4}$"
+        },
+        "tier": {
+          "type": "string",
+          "enum": ["free", "pro", "enterprise"]
+        },
+        "since": {
+          "type": "string",
+          "format": "date"
+        }
+      }
+    },
+    "subject": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 200
+    },
+    "body": {
+      "type": "string",
+      "minLength": 5,
+      "description": "Free text; may contain fenced code blocks (```json, ```yaml), plain log dumps, CSV snippets, and inline tokens."
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "product_area": {
+          "type": "string",
+          "enum": ["api", "dashboard", "billing_portal", "mobile", "webhooks", "data_export", "auth", "unknown"]
+        },
+        "previous_tickets_30d": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "has_attachments": {
+          "type": "boolean"
+        }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "required": ["route", "priority", "requires_human", "ambiguity", "rationale"],
+      "additionalProperties": false,
+      "properties": {
+        "route": {
+          "type": "string",
+          "enum": ["billing", "technical_bug", "escalation", "faq"]
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "critical"]
+        },
+        "requires_human": {
+          "type": "boolean"
+        },
+        "ambiguity": {
+          "type": "string",
+          "enum": ["clear", "ambiguous", "insufficient_info"]
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 20
+        }
+      }
+    }
+  }
+}
