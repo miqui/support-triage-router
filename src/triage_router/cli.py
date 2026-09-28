@@ -33,16 +33,17 @@ class Dispatcher(Protocol):
     """Interface a dispatch callable must implement.
 
     Task 8's dispatch.py must expose a callable matching this exact
-    signature: a single positional `decision` (a RouteDecision) returning
-    a dict. `_noop_dispatch` below is the reference no-op implementation;
-    the real crewai-backed `dispatch.dispatch` function is imported lazily
-    and used as a drop-in replacement via --dispatch.
+    signature: a positional `decision` (a RouteDecision) and `ticket`
+    (the raw ticket dict) returning a dict. `_noop_dispatch` below is the
+    reference no-op implementation; the real crewai-backed
+    `dispatch.dispatch` function is imported lazily and used as a drop-in
+    replacement via --dispatch.
     """
 
-    def __call__(self, decision: RouteDecision) -> dict: ...
+    def __call__(self, decision: RouteDecision, ticket: dict) -> dict: ...
 
 
-def _noop_dispatch(decision: RouteDecision) -> dict:
+def _noop_dispatch(decision: RouteDecision, ticket: dict) -> dict:
     """Default dispatcher: record the intended route, build nothing."""
     return {"status": "noop", "route": decision.route}
 
@@ -95,7 +96,7 @@ def _run_command(args: argparse.Namespace) -> int:
     for ticket in tickets:
         decision = route_ticket(ticket, provider)
         decisions.append(decision)
-        dispatch_results.append(dispatcher(decision))
+        dispatch_results.append(dispatcher(decision, ticket))
 
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
