@@ -8,12 +8,24 @@ network access.
 """
 from __future__ import annotations
 
+import logging
 import math
 import os
 import time
-from typing import Any, Protocol
+from typing import Any, Protocol, Self
 
 import httpx
+
+logger = logging.getLogger(__name__)
+
+
+class ProviderError(Exception):
+    """Raised when the real decision-provider backend call fails.
+
+    Always carries the originating ticket id (best-effort, defensively
+    extracted from state) so failures can be correlated back to a ticket
+    without ever including request payload, headers, or the API key.
+    """
 
 # --- Route keyword sets -----------------------------------------------------
 
@@ -293,6 +305,42 @@ class OpenRouterJevProvider:
 
     def __init__(self, client: httpx.Client | None = None) -> None:
         self._client = client or httpx.Client(timeout=10.0)
+        # Only close a client we created ourselves; a caller-injected client
+        # is owned by the caller and must outlive/be closed by them.
+        self._owns_client = client is None
+
+    def close(self) -> None:
+        """Release the underlying httpx.Client, but only if self-created."""
+        if self._owns_client:
+            self._client.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
+    @staticmethod
+    def _extract_ticket_id(state: dict) -> str:
+        """Best-effort, defensive extraction of a ticket id from state.
+
+        The known build_state() layout has no top-level ticket id, so this
+        checks the plausible key shapes in priority order and falls back to
+        a placeholder rather than raising.
+        """
+        if not isinstance(state, dict):
+            return "unknown"
+        ticket = state.get("ticket")
+        if isinstance(ticket, dict) and ticket.get("id"):
+            return str(ticket["id"])
+        for key in ("ticket_id", "id"):
+            value = state.get(key)
+            if value:
+                return str(value)
+        customer = state.get("customer")
+        if isinstance(customer, dict) and customer.get("id"):
+            return f"customer:{customer['id']}"
+        return "unknown"
 
     def decide(self, state: dict) -> dict:
         api_key = os.environ.get("OPENROUTER_API_KEY")
@@ -310,8 +358,15 @@ class OpenRouterJevProvider:
         }
         headers = {"Authorization": f"Bearer {api_key}"}
 
-        response = self._post_with_retry(payload, headers)
-        response.raise_for_status()
+        ticket_id = self._extract_ticket_id(state)
+        try:
+            response = self._post_with_retry(payload, headers)
+            response.raise_for_status()
+        except (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException) as exc:
+            raise ProviderError(
+                f"OpenRouterJevProvider call failed for ticket={ticket_id}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
         return self.parse_answers(response.json())
 
     def _post_with_retry(self, payload: dict, headers: dict) -> httpx.Response:
@@ -319,9 +374,17 @@ class OpenRouterJevProvider:
         while True:
             try:
                 return self._client.post(_JEV_URL, json=payload, headers=headers)
-            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException):
+            except (httpx.ConnectError, httpx.TimeoutException) as exc:
+                # ConnectTimeout is a subclass of TimeoutException, so it is
+                # already covered here; keep the tuple minimal.
                 if attempt >= _MAX_RETRIES:
                     raise
+                logger.warning(
+                    "OpenRouterJevProvider retry attempt %d/%d after %s",
+                    attempt + 1,
+                    _MAX_RETRIES,
+                    type(exc).__name__,
+                )
                 time.sleep(_BACKOFF_SECONDS[min(attempt, len(_BACKOFF_SECONDS) - 1)])
                 attempt += 1
 

@@ -6,7 +6,11 @@ from unittest import mock
 
 import httpx
 
-from triage_router.decisions import FakeDecisionProvider, OpenRouterJevProvider
+from triage_router.decisions import (
+    FakeDecisionProvider,
+    OpenRouterJevProvider,
+    ProviderError,
+)
 from triage_router.intake import build_state, load_tickets
 
 DATA_PATH = os.path.join(
@@ -254,17 +258,79 @@ class TestOpenRouterJevProviderRequest(_NoNetwork):
             return httpx.Response(400, json={"error": "bad request"})
 
         provider = self._make_provider(handler)
-        with self.assertRaises(httpx.HTTPStatusError):
+        with self.assertRaises(ProviderError) as ctx:
             provider.decide(self.state)
         self.assertEqual(attempts["n"], 1)
+        self.assertIsInstance(ctx.exception.__cause__, httpx.HTTPStatusError)
+        self.assertIn("unknown", str(ctx.exception))
+
+    def test_4xx_error_names_ticket_id(self):
+        state = dict(self.state)
+        state["ticket"] = {"id": "TCK-0042"}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(400, json={"error": "bad request"})
+
+        provider = self._make_provider(handler)
+        with self.assertRaises(ProviderError) as ctx:
+            provider.decide(state)
+        self.assertIn("TCK-0042", str(ctx.exception))
+        self.assertNotIn("test-fake-token-value-not-real", str(ctx.exception))
 
     def test_exhausts_retries_and_raises(self):
         def handler(request: httpx.Request) -> httpx.Response:
             raise httpx.ConnectTimeout("timeout", request=request)
 
+        state = dict(self.state)
+        state["ticket"] = {"id": "TCK-0099"}
+
         provider = self._make_provider(handler)
-        with mock.patch("time.sleep", return_value=None), self.assertRaises(httpx.ConnectTimeout):
+        with mock.patch("time.sleep", return_value=None), self.assertRaises(ProviderError) as ctx:
+            provider.decide(state)
+        self.assertIsInstance(ctx.exception.__cause__, httpx.ConnectTimeout)
+        self.assertIn("TCK-0099", str(ctx.exception))
+        self.assertNotIn("test-fake-token-value-not-real", str(ctx.exception))
+
+    def test_retry_logs_warning_without_sensitive_data(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("boom", request=request)
+
+        provider = self._make_provider(handler)
+        with mock.patch("time.sleep", return_value=None), \
+                self.assertLogs("triage_router.decisions", level="WARNING") as log_ctx, \
+                self.assertRaises(ProviderError):
             provider.decide(self.state)
+        joined = "\n".join(log_ctx.output)
+        self.assertIn("attempt", joined.lower())
+        self.assertNotIn("test-fake-token-value-not-real", joined)
+        self.assertNotIn("Authorization", joined)
+
+    def test_injected_client_is_not_closed_by_close(self):
+        client = httpx.Client(transport=httpx.MockTransport(
+            lambda r: httpx.Response(200, json={"answers": {}})
+        ))
+        provider = OpenRouterJevProvider(client=client)
+        provider.close()
+        self.assertFalse(client.is_closed)
+        client.close()
+
+    def test_self_created_client_is_closed_by_close(self):
+        provider = OpenRouterJevProvider()
+        provider.close()
+        self.assertTrue(provider._client.is_closed)
+
+    def test_context_manager_closes_self_created_client_only(self):
+        with OpenRouterJevProvider() as provider:
+            pass
+        self.assertTrue(provider._client.is_closed)
+
+        client = httpx.Client(transport=httpx.MockTransport(
+            lambda r: httpx.Response(200, json={"answers": {}})
+        ))
+        with OpenRouterJevProvider(client=client):
+            pass
+        self.assertFalse(client.is_closed)
+        client.close()
 
 
 def httpx_json(request: httpx.Request) -> dict:
