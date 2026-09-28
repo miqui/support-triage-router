@@ -21,10 +21,12 @@ from triage_router.decisions import (
     FakeDecisionProvider,
     OpenRouterJevProvider,
 )
+from triage_router.eval import evaluate, format_report
 from triage_router.intake import load_tickets
 from triage_router.router import RouteDecision, route_ticket
 
 _DECISION_FIELDS = ("route", "priority", "confidence", "disposition", "reasons")
+_DEFAULT_TICKETS_PATH = "data/synthetic/support_tickets_synth_v1.jsonl"
 
 
 class Dispatcher(Protocol):
@@ -119,10 +121,22 @@ def _run_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_decisions(path: str) -> list[dict]:
+    decisions: list[dict] = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            decisions.append(json.loads(stripped))
+    return decisions
+
+
 def _eval_command(args: argparse.Namespace) -> int:
-    """Placeholder scoring entry point; Task 7 plugs the real eval module in
-    here without changing the CLI surface."""
-    print(f"eval: scoring not yet implemented (stub) for {args.decisions}")
+    tickets = load_tickets(args.tickets)
+    decisions = _load_decisions(args.decisions)
+    report = evaluate(tickets, decisions)
+    print(format_report(report))
     return 0
 
 
@@ -145,6 +159,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     eval_parser = subparsers.add_parser("eval", help="Score a decisions JSONL")
     eval_parser.add_argument("--decisions", required=True, help="Path to decisions JSONL")
+    eval_parser.add_argument(
+        "--tickets",
+        default=_DEFAULT_TICKETS_PATH,
+        help="Path to tickets JSONL with `expected` labels (default: synthetic dataset)",
+    )
     eval_parser.set_defaults(func=_eval_command)
 
     return parser
