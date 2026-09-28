@@ -188,6 +188,69 @@ class TestCliRun(unittest.TestCase):
             cli.main(["eval", "--decisions", str(decisions_path)])
         self.assertEqual(ctx.exception.code, 0)
 
+    def test_eval_missing_decisions_file_actionable_error(self):
+        missing_path = self.tmp_path / "nope.jsonl"
+        result = _run_cli(
+            "eval",
+            "--decisions",
+            str(missing_path),
+            "--tickets",
+            DATA_PATH,
+            cwd=str(_REPO_ROOT),
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("decisions file not found", result.stderr)
+        self.assertIn(str(missing_path), result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_eval_missing_tickets_file_actionable_error(self):
+        decisions_path = self.tmp_path / "decisions.jsonl"
+        decisions_path.write_text("", encoding="utf-8")
+        missing_tickets = self.tmp_path / "no_tickets.jsonl"
+        result = _run_cli(
+            "eval",
+            "--decisions",
+            str(decisions_path),
+            "--tickets",
+            str(missing_tickets),
+            cwd=str(_REPO_ROOT),
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("tickets file not found", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_eval_malformed_decisions_jsonl_actionable_error(self):
+        decisions_path = self.tmp_path / "decisions.jsonl"
+        decisions_path.write_text("not json\n", encoding="utf-8")
+        result = _run_cli(
+            "eval",
+            "--decisions",
+            str(decisions_path),
+            "--tickets",
+            DATA_PATH,
+            cwd=str(_REPO_ROOT),
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("malformed JSONL at line 1", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_eval_malformed_tickets_jsonl_actionable_error(self):
+        decisions_path = self.tmp_path / "decisions.jsonl"
+        decisions_path.write_text("", encoding="utf-8")
+        tickets_path = self.tmp_path / "tickets.jsonl"
+        tickets_path.write_text("not json\n", encoding="utf-8")
+        result = _run_cli(
+            "eval",
+            "--decisions",
+            str(decisions_path),
+            "--tickets",
+            str(tickets_path),
+            cwd=str(_REPO_ROOT),
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("line 1", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

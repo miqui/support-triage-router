@@ -124,18 +124,42 @@ def _run_command(args: argparse.Namespace) -> int:
 def _load_decisions(path: str) -> list[dict]:
     decisions: list[dict] = []
     with open(path, encoding="utf-8") as f:
-        for line in f:
+        for lineno, line in enumerate(f, start=1):
             stripped = line.strip()
             if not stripped:
                 continue
-            decisions.append(json.loads(stripped))
+            try:
+                decisions.append(json.loads(stripped))
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"malformed JSONL at line {lineno} of {path}: {exc}") from exc
     return decisions
 
 
 def _eval_command(args: argparse.Namespace) -> int:
-    tickets = load_tickets(args.tickets)
-    decisions = _load_decisions(args.decisions)
-    report = evaluate(tickets, decisions)
+    try:
+        tickets = load_tickets(args.tickets)
+    except FileNotFoundError:
+        print(f"triage eval: tickets file not found: {args.tickets}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"triage eval: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        decisions = _load_decisions(args.decisions)
+    except FileNotFoundError:
+        print(f"triage eval: decisions file not found: {args.decisions}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"triage eval: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        report = evaluate(tickets, decisions)
+    except ValueError as exc:
+        print(f"triage eval: {exc}", file=sys.stderr)
+        return 1
+
     print(format_report(report))
     return 0
 

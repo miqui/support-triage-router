@@ -34,17 +34,39 @@ def evaluate(tickets: list[dict], decisions: list[dict]) -> dict:
     ticket_id/route/priority/disposition) against `tickets` (each with an
     `expected` dict). Matches by ticket_id.
 
+    Join validation (fail loud rather than silently mis-scoring):
+
+    * Duplicate `ticket_id` values across `tickets` raise ValueError naming
+      the duplicated id -- silent last-wins would hide a bad input file.
+    * A ticket lacking the `expected` key raises ValueError naming the
+      ticket id -- scoring without ground truth is an eval-input error,
+      not a silent 0.
+    * A decision whose `ticket_id` has no matching ticket is not an error:
+      it is counted and surfaced as `unmatched_decisions` in the report,
+      and excluded from all accuracy scoring (computed only over the
+      matched set).
+    * Empty `tickets`/`decisions` is valid: returns an all-zero report.
+
     Returns a report dict with total, route_correct/accuracy,
     priority_correct/accuracy, priority_none_review_count, review_correct
-    /accuracy, and ambiguity_diagnostics keyed by bucket name.
+    /accuracy, unmatched_decisions, and ambiguity_diagnostics keyed by
+    bucket name.
     """
-    expected_by_id = {t["ticket_id"]: t.get("expected", {}) for t in tickets}
+    expected_by_id: dict[str, dict] = {}
+    for t in tickets:
+        ticket_id = t["ticket_id"]
+        if ticket_id in expected_by_id:
+            raise ValueError(f"duplicate ticket_id in tickets: {ticket_id!r}")
+        if "expected" not in t:
+            raise ValueError(f"ticket {ticket_id!r} is missing required 'expected' field")
+        expected_by_id[ticket_id] = t["expected"]
 
     total = 0
     route_correct = 0
     priority_correct = 0
     priority_none_review_count = 0
     review_correct = 0
+    unmatched_decisions = 0
 
     diagnostics: dict[str, dict[str, int]] = {
         bucket: {"total": 0, "dispatch": 0, "review": 0, "review_correct": 0}
@@ -56,6 +78,7 @@ def evaluate(tickets: list[dict], decisions: list[dict]) -> dict:
             decision, "ticket_id", None
         )
         if ticket_id not in expected_by_id:
+            unmatched_decisions += 1
             continue
         expected = expected_by_id[ticket_id]
 
@@ -104,6 +127,7 @@ def evaluate(tickets: list[dict], decisions: list[dict]) -> dict:
         "priority_none_review_count": priority_none_review_count,
         "review_correct": review_correct,
         "review_accuracy": _safe_div(review_correct, total),
+        "unmatched_decisions": unmatched_decisions,
         "ambiguity_diagnostics": diagnostics,
     }
 
@@ -113,20 +137,25 @@ def format_report(report: dict) -> str:
     lines = []
     total = report["total"]
     lines.append(f"eval report ({total} tickets scored)")
+
+    labels = ("route accuracy:", "priority accuracy:", "review accuracy:")
+    width = max(len(label) for label in labels)
+
     lines.append(
-        f"  route accuracy:    {report['route_correct']}/{total} "
+        f"  {labels[0]:<{width}} {report['route_correct']}/{total} "
         f"({report['route_accuracy'] * 100:.1f}%)"
     )
     lines.append(
-        f"  priority accuracy: {report['priority_correct']}/{total} "
+        f"  {labels[1]:<{width}} {report['priority_correct']}/{total} "
         f"({report['priority_accuracy'] * 100:.1f}%)"
         f"  [none-priority reviews: {report['priority_none_review_count']}]"
     )
     lines.append(
-        f"  review accuracy:   {report['review_correct']}/{total} "
+        f"  {labels[2]:<{width}} {report['review_correct']}/{total} "
         f"({report['review_accuracy'] * 100:.1f}%) "
         "(vs expected.requires_human)"
     )
+    lines.append(f"  unmatched decisions: {report['unmatched_decisions']}")
     lines.append("  ambiguity diagnostics (informational, not scoring target):")
     for bucket in _AMBIGUITY_BUCKETS:
         diag = report["ambiguity_diagnostics"].get(bucket)

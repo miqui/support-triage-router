@@ -155,5 +155,40 @@ class TestFormatReport(unittest.TestCase):
         self.assertIn("100.0%", text)
 
 
+class TestJoinValidation(unittest.TestCase):
+    def test_duplicate_ticket_id_raises_named(self):
+        tickets = [
+            _ticket("TCK-0001", "billing", "high", False, "clear"),
+            _ticket("TCK-0001", "faq", "low", False, "clear"),
+        ]
+        with self.assertRaises(ValueError) as ctx:
+            evaluate(tickets, [])
+        self.assertIn("TCK-0001", str(ctx.exception))
+
+    def test_ticket_missing_expected_raises_named(self):
+        tickets = [{"ticket_id": "TCK-0002"}]
+        with self.assertRaises(ValueError) as ctx:
+            evaluate(tickets, [])
+        self.assertIn("TCK-0002", str(ctx.exception))
+
+    def test_unmatched_decision_counted_and_excluded_from_scoring(self):
+        tickets = [_ticket("TCK-0001", "billing", "high", False, "clear")]
+        decisions = [
+            _decision("TCK-0001", "billing", "high", "dispatch"),
+            _decision("TCK-9999", "faq", "low", "dispatch"),
+        ]
+        report = evaluate(tickets, decisions)
+        self.assertEqual(report["total"], 1)
+        self.assertEqual(report["unmatched_decisions"], 1)
+        self.assertEqual(report["route_correct"], 1)
+
+    def test_empty_tickets_and_decisions_all_zero_report(self):
+        report = evaluate([], [])
+        self.assertEqual(report["total"], 0)
+        self.assertEqual(report["unmatched_decisions"], 0)
+        text = format_report(report)
+        self.assertIn("0/0 (0.0%)", text)
+
+
 if __name__ == "__main__":
     unittest.main()
