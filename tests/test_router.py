@@ -3,7 +3,7 @@ import copy
 import os
 import unittest
 
-from triage_router.decisions import FakeDecisionProvider
+from triage_router.decisions import FakeDecisionProvider, ProviderError
 from triage_router.intake import load_tickets
 from triage_router.router import (
     CONFIDENCE_GATE,
@@ -158,6 +158,104 @@ class TestRouteTicketAllDatasetTickets(unittest.TestCase):
                 self.assertTrue(decision.reasons)
                 dispositions[decision.disposition] += 1
         self.assertEqual(sum(dispositions.values()), 24)
+
+
+class TestRouteTicketProviderError(unittest.TestCase):
+    """Batch contract: never propagate an exception; one RouteDecision always."""
+
+    def test_provider_error_routes_to_review_with_reason(self):
+        class _FailingProvider:
+            def decide(self, _state: dict) -> dict:
+                raise ProviderError("upstream timed out")
+
+        ticket = {"ticket_id": "TCK-error-1", "subject": "x", "body": "y"}
+        decision = route_ticket(ticket, _FailingProvider())
+        self.assertEqual(decision.ticket_id, "TCK-error-1")
+        self.assertEqual(decision.disposition, "review")
+        self.assertIsNone(decision.route)
+        self.assertIsNone(decision.priority)
+        self.assertIsNone(decision.confidence)
+        self.assertTrue(
+            any("provider error" in r.lower() and "upstream timed out" in r for r in decision.reasons),
+            decision.reasons,
+        )
+
+
+class TestRouteTicketEmptyAnswers(unittest.TestCase):
+    def test_empty_answers_reviews_via_no_confidence_rule(self):
+        class _EmptyProvider:
+            def decide(self, _state: dict) -> dict:
+                return {}
+
+        ticket = {"ticket_id": "TCK-empty-1", "subject": "x", "body": "y"}
+        decision = route_ticket(ticket, _EmptyProvider())
+        self.assertEqual(decision.disposition, "review")
+        self.assertIsNone(decision.confidence)
+        self.assertTrue(
+            any("no confidence available" in r.lower() for r in decision.reasons),
+            decision.reasons,
+        )
+
+
+class TestCredentialExposureBoundary(unittest.TestCase):
+    def test_credential_exposure_exactly_half_forces_review(self):
+        answers = {
+            "route": {"value": "billing", "confidence": 0.95},
+            "is_credential_exposure": {"value": 0.5, "confidence": 0.9},
+        }
+
+        class _StateProvider:
+            def decide(self, _state: dict) -> dict:
+                return answers
+
+        ticket = {"ticket_id": "TCK-cred-boundary", "subject": "x", "body": "y"}
+        decision = route_ticket(ticket, _StateProvider())
+        self.assertEqual(decision.disposition, "review")
+        self.assertTrue(
+            any("credential" in r.lower() for r in decision.reasons),
+            decision.reasons,
+        )
+
+
+class TestSeverityBucketGuard(unittest.TestCase):
+    def _decide_with_severity(self, severity: dict) -> RouteDecision:
+        answers = {
+            "route": {"value": "billing", "confidence": 0.95},
+            "severity": severity,
+        }
+
+        class _StateProvider:
+            def decide(self, _state: dict) -> dict:
+                return answers
+
+        ticket = {"ticket_id": "TCK-severity-guard", "subject": "x", "body": "y"}
+        return route_ticket(ticket, _StateProvider())
+
+    def test_negative_score_fails_severity_without_negative_indexing(self):
+        legend = [
+            {"what": "low"},
+            {"what": "medium"},
+            {"what": "high"},
+            {"what": "critical"},
+            {"what": "critical"},
+        ]
+        decision = self._decide_with_severity({"score": -0.4, "legend": legend})
+        self.assertIsNone(decision.priority)
+        self.assertTrue(
+            any("out of bounds" in r.lower() for r in decision.reasons),
+            decision.reasons,
+        )
+
+    def test_score_over_one_still_bounded_by_bucket_clamp(self):
+        legend = [
+            {"what": "low"},
+            {"what": "medium"},
+            {"what": "high"},
+            {"what": "critical"},
+            {"what": "critical"},
+        ]
+        decision = self._decide_with_severity({"score": 1.4, "legend": legend})
+        self.assertEqual(decision.priority, "critical")
 
 
 if __name__ == "__main__":

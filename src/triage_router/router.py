@@ -10,13 +10,14 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from triage_router.decisions import DecisionProvider
+from triage_router.decisions import DecisionProvider, ProviderError
 from triage_router.intake import build_state
 
 # --- Tunable constants -------------------------------------------------------
 
 CONFIDENCE_GATE = 0.70
-SEVERITY_WEIGHT = 0.6
+# (No severity weight here: disposition is driven entirely by the confidence
+# gate and the credential-exposure rule; severity only maps to priority.)
 NOUL_SIGNAL_WEIGHTS = {
     "is_churn_risk": 0.15,
     "is_payment_issue": 0.10,
@@ -62,6 +63,10 @@ def _priority_from_severity(severity: dict | None) -> tuple[str | None, str | No
 
     legend = severity["legend"]
     bucket = min(4, math.floor(score * 5))
+    # Guard against out-of-range scores (negative or > 1.0): a malformed
+    # bucket must fail loudly, never silently wrap via negative indexing.
+    if bucket < 0 or bucket > 4:
+        return None, "severity score out of bounds for bucket calculation"
     bucket_key = str(int(bucket))
 
     if isinstance(legend, list):
@@ -111,12 +116,27 @@ def route_ticket(ticket: dict, provider: DecisionProvider) -> RouteDecision:
 
     Never reads ticket['expected'] — build_state already strips it, and this
     function only ever consumes the state dict and the provider's answers.
+
+    Batch contract: this function always returns exactly one RouteDecision
+    per ticket and never raises. Any ProviderError raised by the provider is
+    caught and converted into a 'review' disposition so a batch of tickets
+    can be processed without one bad provider call aborting the run.
     """
     ticket_id = ticket.get("ticket_id", "unknown")
     reasons: list[str] = []
 
     state = build_state(ticket)
-    answers = provider.decide(state)
+    try:
+        answers = provider.decide(state)
+    except ProviderError as exc:
+        return RouteDecision(
+            ticket_id=ticket_id,
+            route=None,
+            priority=None,
+            confidence=None,
+            disposition="review",
+            reasons=[f"provider error: {exc}"],
+        )
 
     # --- route --------------------------------------------------------------
     route_answer = answers.get("route")
