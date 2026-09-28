@@ -232,8 +232,9 @@ class TestOpenRouterJevProviderRequest(_NoNetwork):
                 lambda r: httpx.Response(200, json={"answers": {}})
             )
             provider = OpenRouterJevProvider(client=httpx.Client(transport=transport))
-            with self.assertRaises(KeyError):
+            with self.assertRaises(ProviderError) as ctx:
                 provider.decide(self.state)
+            self.assertIn("OPENROUTER_API_KEY", str(ctx.exception))
 
     def test_retries_on_connect_error_then_succeeds(self):
         attempts = {"n": 0}

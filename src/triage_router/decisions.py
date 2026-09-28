@@ -345,7 +345,7 @@ class OpenRouterJevProvider:
     def decide(self, state: dict) -> dict:
         api_key = os.environ.get("OPENROUTER_API_KEY")
         if not api_key:
-            raise KeyError(
+            raise ProviderError(
                 "OPENROUTER_API_KEY is not set in the environment. "
                 "Source it (e.g. `export OPENROUTER_API_KEY=...`) before "
                 "using OpenRouterJevProvider."

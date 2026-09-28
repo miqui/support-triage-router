@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections import Counter
 from dataclasses import asdict
+from typing import Protocol
 
 from triage_router.decisions import (
     DecisionProvider,
@@ -23,6 +25,19 @@ from triage_router.intake import load_tickets
 from triage_router.router import RouteDecision, route_ticket
 
 _DECISION_FIELDS = ("route", "priority", "confidence", "disposition", "reasons")
+
+
+class Dispatcher(Protocol):
+    """Interface a dispatch callable must implement.
+
+    Task 8's dispatch.py must expose a callable matching this exact
+    signature: a single positional `decision` (a RouteDecision) returning
+    a dict. `_noop_dispatch` below is the reference no-op implementation;
+    the real crewai-backed `dispatch.dispatch` function is imported lazily
+    and used as a drop-in replacement via --dispatch.
+    """
+
+    def __call__(self, decision: RouteDecision) -> dict: ...
 
 
 def _noop_dispatch(decision: RouteDecision) -> dict:
@@ -48,6 +63,15 @@ def _build_provider(name: str) -> DecisionProvider:
 
 
 def _run_command(args: argparse.Namespace) -> int:
+    if args.provider == "live" and not os.environ.get("OPENROUTER_API_KEY"):
+        print(
+            "error: --provider live requires OPENROUTER_API_KEY to be set in "
+            "the environment. Source it (e.g. `export "
+            "OPENROUTER_API_KEY=...`) before running.",
+            file=sys.stderr,
+        )
+        return 1
+
     provider = _build_provider(args.provider)
 
     dispatcher = _noop_dispatch

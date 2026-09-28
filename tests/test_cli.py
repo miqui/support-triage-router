@@ -16,7 +16,12 @@ _SECRET_TOKEN = "hunter2-synth"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _run_cli(*args: str, cwd: str) -> subprocess.CompletedProcess:
+def _run_cli(*args: str, cwd: str, env: dict | None = None) -> subprocess.CompletedProcess:
+    run_env = None
+    if env is not None:
+        import os
+
+        run_env = {**os.environ, **env}
     return subprocess.run(
         ["uv", "run", "triage", *args],
         cwd=cwd,
@@ -24,6 +29,7 @@ def _run_cli(*args: str, cwd: str) -> subprocess.CompletedProcess:
         text=True,
         timeout=120,
         check=False,
+        env=run_env,
     )
 
 
@@ -143,6 +149,29 @@ class TestCliRun(unittest.TestCase):
                 ]
             )
         self.assertNotEqual(ctx.exception.code, 0)
+
+    def test_live_provider_without_key_fails_fast_before_processing(self):
+        """--provider live with OPENROUTER_API_KEY unset must exit non-zero
+        with an actionable message BEFORE any ticket is processed: no --out
+        file is written (or it stays empty/nonexistent)."""
+        out_path = self.tmp_path / "decisions.jsonl"
+        repo_root = str(_REPO_ROOT)
+        env = dict(__import__("os").environ)
+        env.pop("OPENROUTER_API_KEY", None)
+        result = _run_cli(
+            "run",
+            "--tickets",
+            DATA_PATH,
+            "--provider",
+            "live",
+            "--out",
+            str(out_path),
+            cwd=repo_root,
+            env=env,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("OPENROUTER_API_KEY", result.stderr)
+        self.assertFalse(out_path.exists())
 
     def test_eval_stub_exits_zero(self):
         from triage_router import cli
