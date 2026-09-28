@@ -108,6 +108,10 @@ class TestFakeDecisionProviderShape(unittest.TestCase):
         self.assertEqual(answers["route"]["value"], "billing")
         self.assertGreaterEqual(answers["route"]["confidence"], 0.75)
 
+    def test_empty_state_is_defensive(self):
+        answers = self.provider.decide({})
+        self._assert_valid_shape(answers)
+
 
 if __name__ == "__main__":
     unittest.main()

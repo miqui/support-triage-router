@@ -18,12 +18,14 @@ _ESCALATION_KEYWORDS = {"sla", "urgent"}
 _FAQ_KEYWORDS = {"how do i"}
 
 # --- Confidence thresholds ---------------------------------------------------
+# NOTE: the fake provider only ever emits this discrete set (0.85/0.6/0.3);
+# the real backend returns continuous confidence values, so downstream code
+# must not assume the value space is limited to these three constants.
 
 _HIGH_CONFIDENCE = 0.85
 _MEDIUM_CONFIDENCE = 0.6
 _LOW_CONFIDENCE = 0.3
 
-_MIN_SIGNAL_KEYWORD_HITS = 1
 _FEW_KEYWORD_HITS = 2
 
 # --- Severity legend (5-bucket, mirrors real API contract) ------------------
@@ -47,19 +49,8 @@ class DecisionProvider(Protocol):
 
 
 def _noul(value: float, confidence: float) -> dict[str, float]:
+    """Build a Jev noul: a boolean/probability-style question answer."""
     return {"value": float(value), "confidence": float(confidence)}
-
-
-def _severity_bucket(score: float) -> str:
-    if score >= 0.9:
-        return "4"
-    if score >= 0.7:
-        return "3"
-    if score >= 0.45:
-        return "2"
-    if score >= 0.2:
-        return "1"
-    return "0"
 
 
 class FakeDecisionProvider:
