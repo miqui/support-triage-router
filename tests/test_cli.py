@@ -133,7 +133,7 @@ class TestCliRun(unittest.TestCase):
         real_import = builtins.__import__
 
         def _fake_import(name, *args, **kwargs):
-            if name == "triage_router.dispatch" or name.endswith(".dispatch"):
+            if name in ("triage_router.dispatch", ".dispatch", "dispatch"):
                 raise ImportError("simulated: crewai not importable")
             return real_import(name, *args, **kwargs)
 
