@@ -8,7 +8,12 @@ network access.
 """
 from __future__ import annotations
 
+import math
+import os
+import time
 from typing import Any, Protocol
+
+import httpx
 
 # --- Route keyword sets -----------------------------------------------------
 
@@ -194,3 +199,222 @@ class FakeDecisionProvider:
         if state.get("has_unredacted_credentials"):
             return 1.0, _HIGH_CONFIDENCE
         return 0.0, _HIGH_CONFIDENCE
+
+
+# --- Real API-backed decision provider --------------------------------------
+
+_JEV_URL = "https://openrouter.ai/api/alpha/decisions"
+_JEV_MODEL = "typesafe/jev-1.13"
+_MAX_RETRIES = 2
+_BACKOFF_SECONDS = (0.5, 1.0)
+_VALID_PRIORITIES = {"low", "medium", "high", "critical"}
+
+_ROUTE_CRITERIA = {
+    "billing": (
+        "Ticket concerns payments, refunds, charges, or invoices — see "
+        "`ticket.keyword_hits` for billing-adjacent keywords such as "
+        "refund/charge/invoice/payment."
+    ),
+    "technical_bug": (
+        "Ticket reports an application error, crash, or malfunction — see "
+        "`ticket.has_stack_trace`, `ticket.has_json_block`, "
+        "`ticket.has_yaml_block`, and `ticket.mentions_error`."
+    ),
+    "escalation": (
+        "Ticket expresses urgency, SLA risk, or demands escalation — see "
+        "`ticket.keyword_hits` for sla/urgent markers."
+    ),
+    "faq": (
+        "Ticket is a general how-to or informational question with no "
+        "billing, bug, or urgency signal — see `ticket.subject_len` and "
+        "`ticket.body_chars` for low-signal short tickets."
+    ),
+}
+
+_SEVERITY_CRITERIA = [
+    {"what": "low", "signals": ["no risk keywords", "routine request"]},
+    {"what": "medium", "signals": ["multiple keyword hits", "possible impact"]},
+    {"what": "high", "signals": ["stack trace or error evidence", "urgency language"]},
+    {
+        "what": "critical",
+        "signals": ["escalation markers", "churn/SLA risk", "credential exposure evidence"],
+    },
+]
+
+_NOUL_CRITERIA = {
+    "is_churn_risk": {
+        "true": {
+            "what": "customer shows signs of churn/SLA risk",
+            "examples": ["`ticket.keyword_hits` contains sla or urgent"],
+        },
+        "false": {"what": "no churn or SLA risk signal present"},
+    },
+    "is_payment_issue": {
+        "true": {
+            "what": "ticket is about a payment, charge, refund, or invoice",
+            "examples": ["`ticket.keyword_hits` contains refund/charge/invoice/payment"],
+        },
+        "false": {"what": "ticket is not about a payment issue"},
+    },
+    "is_credential_exposure": {
+        "true": {
+            "what": "ticket contains exposed, unredacted credentials",
+            "not_for": "stack traces or JSON/YAML blocks alone are not evidence",
+        },
+        "false": {"what": "no unredacted credential exposure present"},
+    },
+    "is_urgent_deadline": {
+        "true": {
+            "what": "ticket references an urgent deadline or SLA breach risk",
+            "examples": ["`ticket.keyword_hits` contains sla or urgent"],
+        },
+        "false": {"what": "no urgent deadline referenced"},
+    },
+    "is_how_to_question": {
+        "true": {
+            "what": "ticket is a how-to / informational question",
+            "examples": ["`ticket.keyword_hits` contains 'how do i'"],
+        },
+        "false": {"what": "ticket is not a how-to question"},
+    },
+}
+
+
+class OpenRouterJevProvider:
+    """DecisionProvider backed by the real OpenRouter TypeSafe Jev API.
+
+    Builds the exact Jev question/criteria contract from intake state and
+    sends a single POST per decide() call, with limited retry on
+    connect/timeout errors only (never on 4xx). The API key is read from
+    the environment at call time so it is never hardcoded or persisted.
+    """
+
+    SEVERITY_LEGEND = _SEVERITY_LEGEND
+
+    def __init__(self, client: httpx.Client | None = None) -> None:
+        self._client = client or httpx.Client(timeout=10.0)
+
+    def decide(self, state: dict) -> dict:
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            raise KeyError(
+                "OPENROUTER_API_KEY is not set in the environment. "
+                "Source it (e.g. `export OPENROUTER_API_KEY=...`) before "
+                "using OpenRouterJevProvider."
+            )
+
+        payload = {
+            "model": _JEV_MODEL,
+            "state": state,
+            "questions": self._build_questions(),
+        }
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        response = self._post_with_retry(payload, headers)
+        response.raise_for_status()
+        return self.parse_answers(response.json())
+
+    def _post_with_retry(self, payload: dict, headers: dict) -> httpx.Response:
+        attempt = 0
+        while True:
+            try:
+                return self._client.post(_JEV_URL, json=payload, headers=headers)
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException):
+                if attempt >= _MAX_RETRIES:
+                    raise
+                time.sleep(_BACKOFF_SECONDS[min(attempt, len(_BACKOFF_SECONDS) - 1)])
+                attempt += 1
+
+    @staticmethod
+    def _build_questions() -> dict:
+        return {
+            "route": {
+                "type": "choice",
+                "instructions": (
+                    "Classify the ticket's route based on `ticket.keyword_hits`, "
+                    "`ticket.has_stack_trace`, `ticket.mentions_error`, "
+                    "`ticket.subject_len`, and `ticket.body_chars`."
+                ),
+                "criteria": dict(_ROUTE_CRITERIA),
+            },
+            "severity": {
+                "type": "score",
+                "instructions": (
+                    "Score overall severity 0-1 based on `ticket.keyword_hits`, "
+                    "`ticket.has_stack_trace`, and escalation signals."
+                ),
+                "criteria": [dict(level) for level in _SEVERITY_CRITERIA],
+            },
+            **{
+                name: {
+                    "type": "noul",
+                    "instructions": (
+                        f"Answer whether {name.replace('_', ' ')} applies, based on "
+                        "`ticket.keyword_hits` and related state fields."
+                    ),
+                    "criteria": {k: dict(v) for k, v in crit.items()},
+                }
+                for name, crit in _NOUL_CRITERIA.items()
+            },
+        }
+
+    def parse_answers(self, response_json: dict) -> dict:
+        """Defensively parse `response.answers` into an answers dict.
+
+        Any missing/malformed field fails only that question (represented
+        by omission), never raises. Severity->priority conversion uses only
+        the legend label-matching rule: no arithmetic fallback.
+        """
+        answers = response_json.get("answers")
+        if not isinstance(answers, dict):
+            return {}
+
+        result: dict[str, Any] = {}
+
+        route = answers.get("route")
+        if isinstance(route, dict) and "value" in route and "confidence" in route:
+            result["route"] = {
+                "value": route["value"],
+                "confidence": route["confidence"],
+            }
+
+        severity = self._parse_severity(answers.get("severity"))
+        if severity is not None:
+            result["severity"] = severity
+
+        for name in _NOUL_CRITERIA:
+            noul = answers.get(name)
+            if isinstance(noul, dict) and "value" in noul and "confidence" in noul:
+                result[name] = {
+                    "value": noul["value"],
+                    "confidence": noul["confidence"],
+                }
+
+        return result
+
+    def _parse_severity(self, severity: Any) -> dict | None:
+        if not isinstance(severity, dict) or "score" not in severity:
+            return None
+        score = severity["score"]
+        if isinstance(score, bool) or not isinstance(score, (int, float)):
+            return None
+
+        bucket = min(4, math.floor(score * 5))
+        bucket_key = str(int(bucket))
+        legend = self.SEVERITY_LEGEND
+        if isinstance(legend, list):
+            if bucket >= len(legend):
+                return None
+            level = legend[bucket]
+        elif isinstance(legend, dict):
+            level = legend.get(bucket_key)
+        else:
+            return None
+
+        if not isinstance(level, dict):
+            return None
+        label = level.get("what")
+        if label not in _VALID_PRIORITIES:
+            return None
+
+        return {"score": score, "priority": label}
