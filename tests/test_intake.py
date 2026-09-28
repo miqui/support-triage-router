@@ -144,5 +144,25 @@ class TestCustomerAccountAge(unittest.TestCase):
         self.assertGreater(state["customer"]["account_age_days"], 900)
 
 
+class TestAccountAgeNaiveDate(unittest.TestCase):
+    def test_naive_created_at_yields_none_account_age(self):
+        ticket = {
+            "ticket_id": "TCK-9999",
+            "subject": "help",
+            "body": "it doesnt work",
+            "customer": {"id": "C-0001", "tier": "free", "since": "2024-03-11"},
+            "created_at": "2026-09-02T00:00:00",  # naive, no tz -> would crash
+            "channel": "web_form",
+        }
+        state = build_state(ticket)
+        self.assertIsNone(state["customer"]["account_age_days"])
+        self.assertEqual(state["subject_len"], len("help"))
+        self.assertEqual(state["body_chars"], len("it doesnt work"))
+        self.assertEqual(state["customer"]["id"], "C-0001")
+        self.assertEqual(state["customer"]["tier"], "free")
+        self.assertEqual(state["channel"], "web_form")
+        self.assertNotIn("expected", state)
+
+
 if __name__ == "__main__":
     unittest.main()

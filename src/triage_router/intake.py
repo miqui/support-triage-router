@@ -46,6 +46,8 @@ _SK_TOKEN_RE = re.compile(r"\bsk-[A-Za-z0-9]{8,}\b")
 
 _JSON_FENCE_RE = re.compile(r"```json", re.IGNORECASE)
 _YAML_FENCE_RE = re.compile(r"```yaml", re.IGNORECASE)
+# Intentionally broad: matches Traceback/Exception markers, stack-frame
+# lines, trace-JSON fields, and internal service-call patterns.
 _STACK_TRACE_RE = re.compile(
     r"(Traceback|Exception|at [a-zA-Z_][\w.]*\.[A-Za-z_]\w*\("
     r"|\"trace\"\s*:|\b[A-Z]\w*(?:Service|Pool|Client|Handler)\.\w+\s*->)"
@@ -74,26 +76,23 @@ def redact(text: str) -> tuple[str, int]:
     """Redact credential-like substrings. Returns (redacted_text, count)."""
     count = 0
 
-    def _sub_assignment(m: re.Match) -> str:
+    def _sub(m: re.Match) -> str:
         nonlocal count
         count += 1
         return "***"
 
-    redacted = _CRED_ASSIGNMENT_RE.sub(_sub_assignment, text)
-
-    def _sub_sk(m: re.Match) -> str:
-        nonlocal count
-        count += 1
-        return "***"
-
-    redacted = _SK_TOKEN_RE.sub(_sub_sk, redacted)
+    redacted = _CRED_ASSIGNMENT_RE.sub(_sub, text)
+    redacted = _SK_TOKEN_RE.sub(_sub, redacted)
     return redacted, count
 
 
-def _account_age_days(since: str, created_at: str) -> int:
-    since_dt = datetime.strptime(since, "%Y-%m-%d").replace(tzinfo=UTC)
-    created_dt = datetime.fromisoformat(created_at)
-    return (created_dt - since_dt).days
+def _account_age_days(since: str, created_at: str) -> int | None:
+    try:
+        since_dt = datetime.strptime(since, "%Y-%m-%d").replace(tzinfo=UTC)
+        created_dt = datetime.fromisoformat(created_at)
+        return (created_dt - since_dt).days
+    except (TypeError, ValueError):
+        return None
 
 
 def build_state(ticket: dict[str, Any]) -> dict[str, Any]:
