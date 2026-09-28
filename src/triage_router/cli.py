@@ -1,0 +1,137 @@
+"""Triage CLI: `triage run` and `triage eval` subcommands.
+
+Dispatcher seam: the run command uses an injectable dispatcher. By default
+it is a no-op dispatcher that only records the intended route without
+constructing any crew — real dispatch is opt-in via --dispatch and imports
+the dispatch module lazily, INSIDE the run handler, so `import triage_router
+.cli` never pulls in crewai.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from collections import Counter
+from dataclasses import asdict
+
+from triage_router.decisions import (
+    DecisionProvider,
+    FakeDecisionProvider,
+    OpenRouterJevProvider,
+)
+from triage_router.intake import load_tickets
+from triage_router.router import RouteDecision, route_ticket
+
+_DECISION_FIELDS = ("route", "priority", "confidence", "disposition", "reasons")
+
+
+def _noop_dispatch(decision: RouteDecision) -> dict:
+    """Default dispatcher: record the intended route, build nothing."""
+    return {"status": "noop", "route": decision.route}
+
+
+def _decision_to_record(decision: RouteDecision) -> dict:
+    """Serialize only ticket_id + RouteDecision fields. No raw ticket data."""
+    record = {"ticket_id": decision.ticket_id}
+    payload = asdict(decision)
+    for field_name in _DECISION_FIELDS:
+        record[field_name] = payload[field_name]
+    return record
+
+
+def _build_provider(name: str) -> DecisionProvider:
+    if name == "fake":
+        return FakeDecisionProvider()
+    if name == "live":
+        return OpenRouterJevProvider()
+    raise ValueError(f"unknown provider: {name}")
+
+
+def _run_command(args: argparse.Namespace) -> int:
+    provider = _build_provider(args.provider)
+
+    dispatcher = _noop_dispatch
+    if args.dispatch:
+        try:
+            from .dispatch import dispatch as dispatcher
+        except ImportError as exc:
+            print(
+                "error: --dispatch requires the crewai-backed dispatch module, "
+                f"which could not be imported: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+
+    tickets = load_tickets(args.tickets)
+
+    decisions: list[RouteDecision] = []
+    dispatch_results: list[dict] = []
+    for ticket in tickets:
+        decision = route_ticket(ticket, provider)
+        decisions.append(decision)
+        dispatch_results.append(dispatcher(decision))
+
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as f:
+            for decision in decisions:
+                f.write(json.dumps(_decision_to_record(decision)))
+                f.write("\n")
+
+    route_counts = Counter(d.route for d in decisions)
+    disposition_counts = Counter(d.disposition for d in decisions)
+
+    print(f"processed {len(decisions)} tickets")
+    print("counts by route:")
+    for route, count in sorted(route_counts.items(), key=lambda kv: (kv[0] or "", kv[1])):
+        print(f"  {route}: {count}")
+    print("counts by disposition:")
+    for disposition, count in sorted(disposition_counts.items()):
+        print(f"  {disposition}: {count}")
+    print(
+        f"dispatch: {disposition_counts.get('dispatch', 0)}  "
+        f"review: {disposition_counts.get('review', 0)}"
+    )
+
+    return 0
+
+
+def _eval_command(args: argparse.Namespace) -> int:
+    """Placeholder scoring entry point; Task 7 plugs the real eval module in
+    here without changing the CLI surface."""
+    print(f"eval: scoring not yet implemented (stub) for {args.decisions}")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="triage")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    run_parser = subparsers.add_parser("run", help="Route a batch of tickets")
+    run_parser.add_argument("--tickets", required=True, help="Path to tickets JSONL")
+    run_parser.add_argument(
+        "--provider", choices=("fake", "live"), default="fake", help="Decision provider"
+    )
+    run_parser.add_argument("--out", default=None, help="Path to write decisions JSONL")
+    run_parser.add_argument(
+        "--dispatch",
+        action="store_true",
+        help="Actually dispatch decisions via the crewai-backed dispatcher",
+    )
+    run_parser.set_defaults(func=_run_command)
+
+    eval_parser = subparsers.add_parser("eval", help="Score a decisions JSONL")
+    eval_parser.add_argument("--decisions", required=True, help="Path to decisions JSONL")
+    eval_parser.set_defaults(func=_eval_command)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    exit_code = args.func(args)
+    raise SystemExit(exit_code)
+
+
+if __name__ == "__main__":
+    main()
