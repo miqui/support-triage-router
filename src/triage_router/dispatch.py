@@ -45,7 +45,8 @@ def _build_llm() -> Any:
     )
 
 
-def _billing_crew() -> Any:
+def _billing_crew() -> Any:  # duplication across the four builders below is
+    # intentional: route-specific prose (role/backstory/task), not a factory target.
     from crewai import Agent, Crew, Process, Task
 
     llm = _build_llm()
@@ -191,21 +192,27 @@ def build_crews() -> dict[str, Any]:
 def dispatch(decision: RouteDecision, ticket: dict) -> dict:
     """Dispatch a routed ticket to its route's crew.
 
-    Conforms to cli.Dispatcher: (decision, ticket) -> dict. Never raises —
-    an unknown/missing route is reported as 'skipped', never an exception.
+    Conforms to cli.Dispatcher: (decision, ticket) -> dict. Never raises,
+    across every path: an unknown/missing route is reported as 'skipped',
+    and a crew/kickoff failure (litellm and crewai raise a variety of
+    exception types) is reported as 'error' with the exception message —
+    neither case lets an exception propagate to the caller.
     Only the redacted, derived ticket state (via intake.build_state) is
     ever passed into the crew kickoff input; the raw ticket body never
-    leaves this boundary.
+    leaves this boundary. Only the single crew needed for this route is
+    built, not all four.
     """
     route = decision.route
     if route not in _ROUTES:
         return {"status": "skipped", "reason": f"unknown route: {route!r}"}
 
-    crews = build_crews()
-    crew = crews[route]
+    crew = _CREW_BUILDERS[route]()
 
     state = build_state(ticket)
-    result = crew.kickoff(inputs={"ticket_state": state})
+    try:
+        result = crew.kickoff(inputs={"ticket_state": state})
+    except Exception as exc:  # noqa: BLE001 - litellm/crewai raise heterogeneously
+        return {"status": "error", "route": route, "reason": str(exc)}
 
     return {
         "status": "dispatched",

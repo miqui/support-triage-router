@@ -84,7 +84,9 @@ class TestDispatchRouting(unittest.TestCase):
                 captured["inputs"] = inputs
                 return f"stub-output-for-{route}"
 
-        with patch.object(dispatch_module, "build_crews", return_value={route: _StubCrew()}):
+        with patch.dict(
+            dispatch_module._CREW_BUILDERS, {route: lambda: _StubCrew()}
+        ):
             result = dispatch_module.dispatch(_decision(route), _TICKET)
         return result, captured
 
@@ -127,6 +129,23 @@ class TestDispatchRouting(unittest.TestCase):
 
         result = dispatch(_decision(None), _TICKET)
         self.assertEqual(result["status"], "skipped")
+
+    def test_kickoff_raises_is_reported_as_error_never_raises(self):
+        from triage_router import dispatch as dispatch_module
+
+        class _RaisingCrew:
+            def kickoff(self, inputs=None):
+                raise RuntimeError("litellm: upstream 500")
+
+        with patch.dict(
+            dispatch_module._CREW_BUILDERS, {"billing": lambda: _RaisingCrew()}
+        ):
+            result = dispatch_module.dispatch(_decision("billing"), _TICKET)
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["route"], "billing")
+        self.assertIn("reason", result)
+        self.assertIn("upstream 500", result["reason"])
 
 
 if __name__ == "__main__":
