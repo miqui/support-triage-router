@@ -8,6 +8,10 @@ Python that composes typed Jev answers.
 
 ## Flow diagram
 
+![Support-triage router flow](docs/flow.png)
+
+*Rendered from docs/flow.drawio — open it in draw.io to edit.*
+
 ```
 tickets.jsonl
      │

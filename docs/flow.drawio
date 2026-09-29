@@ -1,0 +1,108 @@
+<mxfile host="app.diagrams.net" agent="hermes-agent" version="24.0.0">
+  <diagram id="triage-router-flow" name="Overall Flow">
+    <mxGraphModel dx="1600" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1650" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="Support-triage router — overall flow" style="text;html=1;fontSize=20;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="480" y="10" width="600" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- Step 1: tickets -->
+        <mxCell id="n_tickets" value="Support tickets&#10;(JSONL, 24 synthetic)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="20" y="120" width="180" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Step 2: CLI -->
+        <mxCell id="n_cli" value="`triage run`&#10;(CLI, argparse)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="250" y="120" width="180" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Step 3: intake -->
+        <mxCell id="n_intake" value="Intake&#10;load_tickets → build_state&#10;REDACT credentials&#10;raw body never leaves machine&#10;`expected` stripped" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="480" y="105" width="220" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- Step 4: Jev decision call -->
+        <mxCell id="n_jev" value="Jev decision call — ONE request&#10;OpenRouter /api/alpha/decisions&#10;model: typesafe/jev-1.13&#10;&#10;5 noul: churn, payment,&#10;credential exposure, urgent&#10;deadline, how-to&#10;+ choice: route&#10;(billing|technical_bug|escalation|faq)&#10;+ score: severity&#10;(0–1 + 5-bucket legend)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="750" y="70" width="280" height="180" as="geometry" />
+        </mxCell>
+
+        <!-- Step 5: compose in code -->
+        <mxCell id="n_compose" value="Compose in code (router.py)&#10;legend label-matching priority&#10;confidence rule: route confidence&#10;→ else min across answers&#10;→ else none" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="1080" y="90" width="240" height="120" as="geometry" />
+        </mxCell>
+
+        <!-- Step 6: confidence gate (accent) -->
+        <mxCell id="n_gate" value="Confidence gate (0.70)&#10;+ credential-exposure&#10;forces review" style="rhombus;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1370" y="80" width="200" height="140" as="geometry" />
+        </mxCell>
+
+        <!-- Step 7a: dispatch -->
+        <mxCell id="n_dispatch" value="DISPATCH → CrewAI crew&#10;for the route&#10;(billing / technical_bug /&#10;escalation / faq)&#10;Process.sequential&#10;MAX_ITER=3, MAX_RPM=10&#10;model: z-ai/glm-5.3-flash&#10;via OpenRouter" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="1620" y="10" width="260" height="160" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n_crew_output" value="Crew output" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="1930" y="50" width="160" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Step 7b: review queue -->
+        <mxCell id="n_review" value="REVIEW QUEUE (human)&#10;from: low confidence,&#10;credential exposure,&#10;invalid route,&#10;provider error" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="1620" y="320" width="260" height="120" as="geometry" />
+        </mxCell>
+
+        <!-- Step 8: batch contract note -->
+        <mxCell id="n_batch_note" value="Never-raises batch contract:&#10;one decision per ticket&#10;(dispatch/eval CLI paths never&#10;let an exception escape&#10;per-ticket processing)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="1080" y="420" width="260" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n_eval" value="`triage eval` box&#10;scores vs expected.requires_human&#10;route / priority / review accuracy&#10;+ per-ambiguity diagnostics" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="1930" y="420" width="280" height="110" as="geometry" />
+        </mxCell>
+
+        <!-- Edges: main left-to-right chain -->
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="n_tickets" target="n_cli">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="n_cli" target="n_intake">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="n_intake" target="n_jev">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="n_jev" target="n_compose">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="n_compose" target="n_gate">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Branch at gate -->
+        <mxCell id="e6_dispatch" value="confidence &gt;= 0.70&#10;&amp; route resolvable" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontColor=#82b366;" edge="1" parent="1" source="n_gate" target="n_dispatch">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7_review" value="low conf / credential&#10;exposure / invalid route" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;fontColor=#b85450;" edge="1" parent="1" source="n_gate" target="n_review">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="n_dispatch" target="n_crew_output">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Batch contract + eval, dashed connectors down to bottom notes -->
+        <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;endArrow=none;" edge="1" parent="1" source="n_compose" target="n_batch_note">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" value="scores" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;" edge="1" parent="1" source="n_crew_output" target="n_eval">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" value="scores" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;" edge="1" parent="1" source="n_review" target="n_eval">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
