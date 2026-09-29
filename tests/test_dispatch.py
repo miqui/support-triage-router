@@ -148,5 +148,15 @@ class TestDispatchRouting(unittest.TestCase):
         self.assertIn("upstream 500", result["reason"])
 
 
+class TestBuildLlmMissingKey(unittest.TestCase):
+    def test_build_llm_raises_when_api_key_missing(self):
+        from triage_router.dispatch import _build_llm
+
+        with patch.dict("os.environ", {}, clear=True), self.assertRaises(Exception) as ctx:
+            _build_llm()
+
+        self.assertIn("API key required for openrouter", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
